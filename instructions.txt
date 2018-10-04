@@ -1,0 +1,104 @@
+Here are the exact steps you need to take ,in order for it to work :
+
+1.	Create the crds : kubectl create -f https://raw.githubusercontent.com/Azure/aad-pod-identity/master/deploy/infra/deployment.yaml
+2.	Follow : https://github.com/Azure/application-gateway-kubernetes-ingress/blob/master/docs/install.md
+
+Setting up aad-pod-identity
+The aad-pod-identity gives a clean way of exposing an existing Azure AD identity to a pod. Kindly follow the aad-pod-identity installation instructions to deploy the aad-pod-identity service on your AKS cluster. This is a pre-requisite for installing the ingress controller.
+
+Create Azure Identity on ARM
+Create an Azure identity in the same resource group as the AKS nodes (typically the resource group with a MC_ prefix string)
+
+az identity create -g <resourcegroup> -n <identity-name>
+Find the principal, resource and client ID for this identity
+
+az identity show -g <resourcegroup> -n <identity-name>
+Assign this new identity Contributor access on the application gateway
+
+az role assignment create --role Contributor --assignee <principal ID from the command above> --scope <Resource ID of Application Gateway>
+Assign this new identity Reader access on the resource group that the application gateway belongs to
+
+az role assignment create --role Reader --assignee <principal ID from the command above> --scope <Resource ID of Application Gateway Resource>
+
+3.	Create the following json file attached fill in the correct values : save it as auth.json
+
+{
+  "clientId": “",      //located on any kubernetes node at /etc/kubernetes/azure.json [aadClientId]
+  "clientSecret": " ", //located on any kubernetes node at /etc/kubernetes/azure.json [aadClientSecret]
+  "subscriptionId": "", //your subid
+  "tenantId": "", //get it from the cli az account show
+  "activeDirectoryEndpointUrl": "https://login.microsoftonline.com",
+  "resourceManagerEndpointUrl": "https://management.azure.com/",
+  "activeDirectoryGraphResourceId": "https://graph.windows.net/",
+  "sqlManagementEndpointUrl": "https://management.core.windows.net:8443/",
+  "galleryEndpointUrl": "https://gallery.azure.com/",
+  "managementEndpointUrl": "https://management.core.windows.net/",
+  "rgname": "",    //your kubernetes MC_rgname from the portal 
+  "location": "" //region of the kubernetes
+  
+  }
+
+4.	Create the secret :
+kubectl create secret generic networking-appgw-k8s-azure-service-principal --from-file=”full path to you auth.json file”
+
+5.	Deploy the helm chart attached : save as yaml file.
+
+# This file contains the essential configs for the ingress controller helm chart
+
+################################################################################
+# Specify which application gateway the ingress controller will manage
+# Change to suit your needs :
+appgw:
+  subscriptionId: 928f4e7e-2c28-4063-a56e-6f1e6f2bb73c
+  resourceGroup: MC_waf_wafcheck_northeurope
+  name: wafchk
+
+################################################################################
+# Specify which kubernetes namespace the ingress controller will watch
+# Default value is "default"
+#
+# kubernetes:
+#   watchNamespace: <namespace>
+
+################################################################################
+# Specify the authentication with Azure Resource Manager
+#
+# Two authentication methods are available:
+# - Option 1: AAD-Pod-Identity (https://github.com/Azure/aad-pod-identity)
+#armAuth:
+ # type: aadPodIdentity
+  #identityResourceID: /subscriptions/928f4e7e-2c28-4063-a56e-6f1e6f2bb73c/resourcegroups/MC_waf_wafcheck_northeurope/providers/Microsoft.ManagedIdentity/userAssignedIdentities/wafidentity
+  #identityClientID:  40264625-fdc9-4c11-a9e2-0048daa9f8e2
+
+# - Option 2: ServicePrincipal as a kubernetes secret
+armAuth:
+   type: servicePrincipal
+   secretName: networking-appgw-k8s-azure-service-principal
+   secretKey:  auth.json
+
+Deploy the helm chart : 
+helm repo add application-gateway-kubernetes-ingress https://azure.github.io/application-gateway-kubernetes-ingress/helm/
+helm repo update
+
+helm install -f <helm-config.yaml> application-gateway-kubernetes-ingress/ingress-azure
+
+6.	Verify ingress logs : you should see it is waiting for events :
+
+dinorgeler@win10: local$kubectl create skubectl logs wrinkled-antelope-ingress-azure-84bd46ff94-hjdrw
+I1004 06:32:24.847798       1 main.go:60] Creating authorizer from file referenced by AZURE_AUTH_LOCATION
+I1004 06:32:25.423704       1 context.go:281] k8s context run started
+I1004 06:32:25.423747       1 context.go:368] start waiting for initial cache sync
+I1004 06:32:25.424036       1 reflector.go:202] Starting reflector *v1.Endpoints (30s) from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:364
+I1004 06:32:25.424080       1 reflector.go:240] Listing and watching *v1.Endpoints from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:364
+I1004 06:32:25.424491       1 reflector.go:202] Starting reflector *v1.Service (30s) from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:365
+I1004 06:32:25.424524       1 reflector.go:240] Listing and watching *v1.Service from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:365
+I1004 06:32:25.424953       1 reflector.go:202] Starting reflector *v1.Secret (30s) from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:366
+I1004 06:32:25.424986       1 reflector.go:240] Listing and watching *v1.Secret from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:366
+I1004 06:32:25.524230       1 reflector.go:202] Starting reflector *v1beta1.Ingress (30s) from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:375
+I1004 06:32:25.524276       1 reflector.go:240] Listing and watching *v1beta1.Ingress from github.com/Azure/application-gateway-kubernetes-ingress/pkg/k8scontext/context.go:375
+I1004 06:32:25.624164       1 context.go:383] ingress initial sync done
+I1004 06:32:25.624207       1 context.go:283] k8s context run finished
+
+
+7.	Deploy the sample app : https://github.com/Azure/application-gateway-kubernetes-ingress/blob/master/docs/tutorial.md
+
